@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import { pathToFileURL } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { Bed, Doctor, Appointment, ChatResponse, TraceStep, TriageOutput, DoctorOutput, AppointmentOutput, BedOutput, ReminderOutput, SupervisorOutput } from './src/types';
@@ -714,7 +715,7 @@ app.post('/api/reset-data', (req, res) => {
 
 
 // --- Vite Dev Middleware and Production Static Server ---
-async function startServer() {
+export async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -729,9 +730,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  return app.listen(PORT, '0.0.0.0', () => {
     console.log(`Hospital AI Coordinator active on port ${PORT}`);
   });
 }
 
-startServer();
+const isDirectRun = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+if (isDirectRun) {
+  startServer();
+}
+
+export { app };
+export default app;
