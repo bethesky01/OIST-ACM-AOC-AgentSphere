@@ -6,10 +6,11 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { Bed, Doctor, Appointment, ChatResponse, TraceStep, TriageOutput, DoctorOutput, AppointmentOutput, BedOutput, ReminderOutput, SupervisorOutput } from './src/types';
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const HOST = '0.0.0.0';
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -73,10 +74,10 @@ let appointments: Appointment[] = [
 ];
 
 // --- Initialize Gemini AI Client ---
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = (process.env.GEMINI_API_KEY || '').trim();
 let ai: GoogleGenAI | null = null;
 
-if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
+if (apiKey && apiKey !== 'MY_GEMINI_API_KEY' && !apiKey.includes('your_actual_api_key_here')) {
   console.log('Initializing GoogleGenAI client with user secret key...');
   ai = new GoogleGenAI({
     apiKey: apiKey,
@@ -125,6 +126,19 @@ app.post('/api/beds/toggle', (req, res) => {
 });
 
 app.post('/api/beds/reset', (req, res) => {
+  beds = beds.map((b, idx) => {
+    if (idx % 4 === 0) {
+      return { ...b, status: 'occupied', patientName: b.patientName || 'Default Patient', assignedAt: new Date().toISOString() };
+    }
+    if (idx % 7 === 0) {
+      return { ...b, status: 'reserved', patientName: 'Reserved (Triage)' };
+    }
+    return { ...b, status: 'available', patientName: undefined, assignedAt: undefined };
+  });
+  res.json({ success: true, beds });
+});
+
+app.post('/api/reset-data', (req, res) => {
   beds = beds.map((b, idx) => {
     if (idx % 4 === 0) {
       return { ...b, status: 'occupied', patientName: b.patientName || 'Default Patient', assignedAt: new Date().toISOString() };
@@ -347,7 +361,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
       }
     });
 
-    const superVal = JSON.parse(supervisorResponse.text.trim()) as SupervisorOutput;
+    const supervisorText = supervisorResponse.text?.trim();
+    if (!supervisorText) {
+      throw new Error('Supervisor agent returned no content.');
+    }
+    const superVal = JSON.parse(supervisorText) as SupervisorOutput;
     steps.push({
       id: '1',
       name: 'Supervisor Agent Delegation',
@@ -388,7 +406,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
           }
         }
       });
-      triageVal = JSON.parse(triageRes.text.trim()) as TriageOutput;
+      const triageText = triageRes.text?.trim();
+      if (!triageText) {
+        throw new Error('Triage agent returned no content.');
+      }
+      triageVal = JSON.parse(triageText) as TriageOutput;
       steps.push({
         id: '2',
         name: 'Patient Triage Specialist',
@@ -431,7 +453,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
           }
         }
       });
-      doctorVal = JSON.parse(doctorRes.text.trim()) as DoctorOutput;
+      const doctorText = doctorRes.text?.trim();
+      if (!doctorText) {
+        throw new Error('Doctor agent returned no content.');
+      }
+      doctorVal = JSON.parse(doctorText) as DoctorOutput;
       steps.push({
         id: '3',
         name: 'Doctor Assistant Specialist',
@@ -501,7 +527,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
         }
       });
 
-      apptVal = JSON.parse(apptRes.text.trim()) as AppointmentOutput;
+      const apptText = apptRes.text?.trim();
+      if (!apptText) {
+        throw new Error('Appointment agent returned no content.');
+      }
+      apptVal = JSON.parse(apptText) as AppointmentOutput;
       
       // Persist the booked appointment in our actual DB!
       if (apptVal.selectedDoctor) {
@@ -570,7 +600,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
           }
         }
       });
-      bedVal = JSON.parse(bedRes.text.trim()) as BedOutput;
+      const bedText = bedRes.text?.trim();
+      if (!bedText) {
+        throw new Error('Bed allocation agent returned no content.');
+      }
+      bedVal = JSON.parse(bedText) as BedOutput;
       steps.push({
         id: '5',
         name: 'Bed Allocation Specialist',
@@ -619,7 +653,11 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
           }
         }
       });
-      reminderVal = JSON.parse(reminderRes.text.trim()) as ReminderOutput;
+      const reminderText = reminderRes.text?.trim();
+      if (!reminderText) {
+        throw new Error('Medication agent returned no content.');
+      }
+      reminderVal = JSON.parse(reminderText) as ReminderOutput;
       steps.push({
         id: '6',
         name: 'Medication Scheduler Specialist',
@@ -649,8 +687,13 @@ async function runGeminiMultiAgentCoordinator(query: string): Promise<ChatRespon
       3. A word of assurance. Do not mention system-internal files, agents, or JSON schemas.`
     });
 
+    const synthesisText = synthesisRes.text?.trim();
+    if (!synthesisText) {
+      throw new Error('Synthesis agent returned no content.');
+    }
+
     return {
-      message: synthesisRes.text.trim(),
+      message: synthesisText,
       trace: steps,
       structuredData: structData
     };
@@ -715,10 +758,33 @@ app.post('/api/reset-data', (req, res) => {
 
 
 // --- Vite Dev Middleware and Production Static Server ---
+function listenWithFallback(port: number) {
+  return new Promise<any>((resolve, reject) => {
+    const tryListen = (currentPort: number) => {
+      const server = app.listen(currentPort, HOST, () => {
+        console.log(`Hospital AI Coordinator active on port ${currentPort}`);
+        resolve(server);
+      });
+
+      server.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE' && currentPort < currentPort + 10) {
+          console.warn(`Port ${currentPort} is busy, trying ${currentPort + 1}...`);
+          server.close();
+          tryListen(currentPort + 1);
+        } else {
+          reject(error);
+        }
+      });
+    };
+
+    tryListen(port);
+  });
+}
+
 export async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false, host: HOST },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -730,14 +796,15 @@ export async function startServer() {
     });
   }
 
-  return app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Hospital AI Coordinator active on port ${PORT}`);
-  });
+  return listenWithFallback(PORT);
 }
 
 const isDirectRun = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 if (isDirectRun) {
-  startServer();
+  startServer().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
 }
 
 export { app };
