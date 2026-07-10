@@ -1,0 +1,6 @@
+{
+  "name": "SehatTatkal",
+  "description": "An AI-powered Multi-Agent Hospital Assistant that helps patients receive faster medical guidance by coordinating multiple intelligent agents (Triage, Doctor, Appointment, Bed, Reminder) and visualizes real-time bed availability and patient triage workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
