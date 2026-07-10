@@ -799,7 +799,13 @@ export async function startServer() {
   return listenWithFallback(PORT);
 }
 
-const isDirectRun = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+const isDirectRun = Boolean(
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href &&
+  !process.env.VERCEL &&
+  !process.env.NOW_REGION
+);
+
 if (isDirectRun) {
   startServer().catch((error) => {
     console.error('Failed to start server:', error);
